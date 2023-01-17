@@ -1,7 +1,7 @@
 # github.com/leftbones/nancy
 # Nim + ANSI = Nancy
 
-import os, terminal, strformat
+import terminal, strformat
 
 type
     Key* {.pure.} = enum
