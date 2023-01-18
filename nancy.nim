@@ -1,19 +1,32 @@
+# Nancy - Experimental TUI library for Nim
 # github.com/leftbones/nancy
 # Nim + ANSI = Nancy
 
 import terminal, strformat
+import input
 
 type
-    Key* {.pure.} = enum
-        Escape = '\e'
-
-type
-    NancyError* = object of Exception
+    NancyError* = object of CatchableError
 
 var code: string = "\x1b"
 var nancyInitialized: bool = false
 
+proc setCursor(x, y: Natural) =
+    # Set the cursor's position directly
+    stdout.write fmt"{code}[{y};{x}H"
+
+
+proc clearLine() =
+    # Clear the current line
+    stdout.write code & "[2K"
+
+proc clearLine(x, y: Natural) =
+    # Move the cursor to a position and clear the line
+    setCursor(x, y)
+    stdout.write code & "[2K"
+
 proc nancyStart(hide_cursor: bool = true) =
+    # Initialize Nancy
     if nancyInitialized:
         raise newException(NancyError, "Nancy already initialized")
 
@@ -21,33 +34,31 @@ proc nancyStart(hide_cursor: bool = true) =
         stdout.write code & "[?25l"
 
     stdout.write code & "[?1049h"
+    setCursor(0, 0)
     nancyInitialized = true
 
 proc nancyExit() =
+    # Return the terminal to it's previous state
     stdout.write code & "[?25h"
     stdout.write code & "[?1049l"
-
-proc getKey(): char =
-    return getch()
-
-proc setCursor(x, y: Natural) =
-    stdout.write fmt"{code}[{y};{x}H"
 
 
 # TESTING
 # =========================
 
 nancyStart()
+stdout.write("Press any key")
 
-while true:
-    var ch = getKey()
-    case ch
-    of 'q':
-        break
+var exit: bool = false
+while not exit:
+    var key = getKey()
+    case key
     of Key.Escape:
+        exit = true
         break
     else:
-        setCursor(0, 0)
-        stdout.write "Key: " & ch
+        if key != Key.None:
+            clearLine(0, 2)
+            stdout.write fmt"{key} ({int(key)})"
 
 nancyExit()
