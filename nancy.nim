@@ -2,7 +2,7 @@
 # github.com/leftbones/nancy
 # Nim + ANSI = Nancy
 
-import terminal, strformat
+import terminal, strformat, strutils
 import input
 
 type
@@ -33,12 +33,16 @@ proc nancyStart(hide_cursor: bool = true) =
     if hide_cursor:
         stdout.write code & "[?25l"
 
+    consoleInit()
+
     stdout.write code & "[?1049h"
     setCursor(0, 0)
     nancyInitialized = true
 
 proc nancyExit() =
     # Return the terminal to it's previous state
+    consoleDeinit()
+
     stdout.write code & "[?25h"
     stdout.write code & "[?1049l"
 
@@ -49,7 +53,7 @@ proc nancyExit() =
 nancyStart()
 stdout.write("Press any key")
 
-var exit: bool = false
+var exit = false
 while not exit:
     var key = getKey()
     case key

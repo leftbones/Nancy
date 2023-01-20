@@ -5,45 +5,6 @@
 # https://github.com/johnnovak/illwill/blob/master/illwill.nim
 # https://github.com/genotrance/snip/blob/master/src/snip/key.nim
 
-when defined(windows):
-  proc getch(): char {.header: "<conio.h>", importc: "getch".}
-  proc kbhit(): int {.header: "<conio.h>", importc: "kbhit".}
-else:
-  {.compile: "getch.c".}
-
-  proc enable_raw_mode() {.importc.}
-  proc disable_raw_mode() {.importc.}
-  proc getch(): char {.importc.}
-  proc kbhit(): int {.importc.}
-
-  proc cleanExit*() =
-    disable_raw_mode()
-
-proc readKey*(): seq[int] {.inline.} =
-  result = @[]
-  when not defined(windows):
-    enable_raw_mode()
-
-  var
-    lchr: char
-    code: int
-
-  while kbhit() != 0:
-    lchr = getch()
-    if lchr.int < 32 or lchr.int > 127:
-      code = lchr.int
-      if lchr.int in [0, 27, 224]:
-        while kbhit() != 0:
-          lchr = getch()
-          result.add(lchr.int)
-          # code = lchr.int
-      result.insert(code, 0)
-    else:
-      result.add(lchr.int)
-
-  when not defined(windows):
-    disable_raw_mode()
-
 type
   Key* {.pure.} = enum      ## Supported single key presses and key combinations
     None = (-1, "None"),
@@ -215,44 +176,130 @@ proc toKey(k: int): Key =
     except RangeDefect:
         result = Key.None
 
-proc getKey*(): Key =
-    var k = readKey()
-    var key = Key.None
+# Windows
+# --------------------
+when defined(windows):
+  proc getch(): char {.header: "<conio.h>", importc: "getch".}
+  proc kbhit(): int {.header: "<conio.h>", importc: "kbhit".}
 
-    if k.len == 2:
-        if k[0] == 0:
-            case k[1]:
-                of 59: key = Key.F1
-                of 60: key = Key.F2
-                of 61: key = Key.F3
-                of 62: key = Key.F4
-                of 63: key = Key.F5
-                of 64: key = Key.F6
-                of 65: key = Key.F7
-                of 66: key = Key.F8
-                of 67: key = Key.F9
-                of 68: key = Key.F10
-                else: discard
-        elif k[0] == 224:
-            case k[1]:
-                of 72: key = Key.Up
-                of 75: key = Key.Left
-                of 77: key = Key.Right
-                of 80: key = Key.Down
-                
-                of 71: key = Key.Home
-                of 82: key = Key.Insert
-                of 83: key = Key.Delete
-                of 79: key = Key.End
-                of 73: key = Key.PageUp
-                of 81: key = Key.PageDown
+  proc consoleInit*() =
+    return
 
-                of 133: key = Key.F11
-                of 134: key = Key.F12
-                else: discard
+  proc consoleDeinit*() = 
+    return
+
+  proc readKey*(): seq[int] {.inline.} =
+    result = @[]
+
+    var
+      lchr: char
+      code: int
+
+    while kbhit() != 0:
+      lchr = getch()
+      if lchr.int < 32 or lchr.int > 127:
+        code = lchr.int
+        if lchr.int in [0, 27, 224]:
+          while kbhit() != 0:
+            lchr = getch()
+            result.add(lchr.int)
+        result.insert(code, 0)
+      else:
+        result.add(lchr.int)
+
+  proc getKey*(): Key =
+      var k = readKey()
+      var key = Key.None
+
+      if k.len == 2:
+          if k[0] == 0:
+              case k[1]:
+                  of 59: key = Key.F1
+                  of 60: key = Key.F2
+                  of 61: key = Key.F3
+                  of 62: key = Key.F4
+                  of 63: key = Key.F5
+                  of 64: key = Key.F6
+                  of 65: key = Key.F7
+                  of 66: key = Key.F8
+                  of 67: key = Key.F9
+                  of 68: key = Key.F10
+                  else: discard
+          elif k[0] == 224:
+              case k[1]:
+                  of 72: key = Key.Up
+                  of 75: key = Key.Left
+                  of 77: key = Key.Right
+                  of 80: key = Key.Down
+                  
+                  of 71: key = Key.Home
+                  of 82: key = Key.Insert
+                  of 83: key = Key.Delete
+                  of 79: key = Key.End
+                  of 73: key = Key.PageUp
+                  of 81: key = Key.PageDown
+
+                  of 133: key = Key.F11
+                  of 134: key = Key.F12
+                  else: discard
+      else:
+          try:
+              key = toKey(k[0])
+          except IndexDefect, RangeDefect:
+              discard
+      return key
+
+
+# Linux/macOS
+# --------------------
+else:
+  import posix, tables, termios
+
+  proc installSignalHandlers() =
+    signal(SIGCONT, SIGCONT_handler)
+    signal(SIGTSTP, SIGSTP_handler)
+
+  proc nonblock(enabled: bool) =
+    var ttyState: Termios
+
+    discard tcGetAttr(STDIN_FILENO, ttyState.addr)
+
+    if enabled:
+      ttyState.c_lflag = ttyState.c_lflag and not CFlag(ICANON or ECHO)
+      ttyState.c_cc[VMIN] = 0.cuchar
     else:
-        try:
-            key = toKey(k[0])
-        except IndexDefect, RangeDefect:
-            discard
-    return key
+      ttyState.c_lflag = ttyState.c_lflag or ICANON or ECHO
+
+    discard tcSetAttr(STDIN_FILENO, TCSANOW, ttyState.addr)
+
+  proc consoleInit*() =
+    nonblock(true)
+    installSignalHandlers()
+
+  proc consoleDeinit*() =
+    nonblock(false)
+
+  proc kbhit(): cint =
+    var tv: Timeval
+    tv.tv_sec = Time(0)
+    tv.tv_usec = 0
+
+    var fds: TFdSet
+    FD_ZERO(fds)
+    FD_SET(STDIN_FILENO, fds)
+    discard select(STDIN_FILENO+1, fds.addr, nil, nil, tv.addr)
+    return FD_ISSET(STDIN_FILENO, fds)
+
+  proc getKey*(): Key {.inline.} =
+    result = @[]
+    var i = 0
+    while kbhit() > 0 and i < 100:
+      var ret = read(0, keyBuf[i].addr, 1)
+      if ret > 0:
+        i += 1
+      else:
+        break
+    if i == 0:
+      result = Key.None
+    else:
+      result = toKey(i)
