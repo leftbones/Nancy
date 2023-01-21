@@ -2,28 +2,31 @@
 # github.com/leftbones/nancy
 # Nim + ANSI = Nancy
 
-import terminal, strformat, strutils
+import strformat
 import input
 
 type
     NancyError* = object of CatchableError
 
-var code: string = "\x1b"
+var esc: string = "\x1b"
 var nancyInitialized: bool = false
 
 proc setCursor(x, y: Natural) =
     # Set the cursor's position directly
-    stdout.write fmt"{code}[{y};{x}H"
-
+    stdout.write fmt"{esc}[{y};{x}H"
 
 proc clearLine() =
     # Clear the current line
-    stdout.write code & "[2K"
+    stdout.write esc & "[2K"
 
-proc clearLine(x, y: Natural) =
+proc clearLineAt(x, y: Natural) =
     # Move the cursor to a position and clear the line
     setCursor(x, y)
-    stdout.write code & "[2K"
+    clearLine()
+
+proc write(x, y: Natural, s: string) =
+    clearLineAt(x, y)
+    echo s
 
 proc nancyStart(hide_cursor: bool = true) =
     # Initialize Nancy
@@ -31,27 +34,25 @@ proc nancyStart(hide_cursor: bool = true) =
         raise newException(NancyError, "Nancy already initialized")
 
     if hide_cursor:
-        stdout.write code & "[?25l"
+        stdout.write esc & "[?25l"
 
-    consoleInit()
-
-    stdout.write code & "[?1049h"
+    stdout.write esc & "[?1049h"
     setCursor(0, 0)
+    nonblock(true)
     nancyInitialized = true
 
 proc nancyExit() =
     # Return the terminal to it's previous state
-    consoleDeinit()
-
-    stdout.write code & "[?25h"
-    stdout.write code & "[?1049l"
+    stdout.write esc & "[?25h"
+    stdout.write esc & "[?1049l"
+    nonblock(false)
 
 
 # TESTING
 # =========================
 
 nancyStart()
-stdout.write("Press any key")
+write(0, 1, "Press Any Key")
 
 var exit = false
 while not exit:
@@ -62,7 +63,6 @@ while not exit:
         break
     else:
         if key != Key.None:
-            clearLine(0, 2)
-            stdout.write fmt"{key} ({int(key)})"
+            write(0, 2, fmt"{key} ({int(key)})")
 
 nancyExit()

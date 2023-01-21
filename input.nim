@@ -1,12 +1,16 @@
 # Nancy - input.nim
 # github.com/leftbones/nancy
 #
+# This code is kind of a mess, but it works. I need to study more about why and how reading special characters
+# is so different and weird on Windows vs Linux/macOS
+#
 # References:
 # https://github.com/johnnovak/illwill/blob/master/illwill.nim
 # https://github.com/genotrance/snip/blob/master/src/snip/key.nim
 
 type
-  Key* {.pure.} = enum      ## Supported single key presses and key combinations
+  Key* {.pure.} = enum
+    Error = (-2, "Error"),
     None = (-1, "None"),
 
     # Special ASCII characters
@@ -182,10 +186,7 @@ when defined(windows):
   proc getch(): char {.header: "<conio.h>", importc: "getch".}
   proc kbhit(): int {.header: "<conio.h>", importc: "kbhit".}
 
-  proc consoleInit*() =
-    return
-
-  proc consoleDeinit*() = 
+  proc nonblock*(enabled: bool) =
     return
 
   proc readKey*(): seq[int] {.inline.} =
@@ -253,53 +254,92 @@ when defined(windows):
 # Linux/macOS
 # --------------------
 else:
-  import posix, tables, termios
+    import posix, termios, tables
 
-  proc installSignalHandlers() =
-    signal(SIGCONT, SIGCONT_handler)
-    signal(SIGTSTP, SIGSTP_handler)
+    var keyBuf {.threadvar.}: array[100, int]
 
-  proc nonblock(enabled: bool) =
-    var ttyState: Termios
+    const keySequences = {
+        ord(Key.Up):        @["\eOA", "\e[A"],
+        ord(Key.Down):      @["\eOB", "\e[B"],
+        ord(Key.Right):     @["\eOC", "\e[C"],
+        ord(Key.Left):      @["\eOD", "\e[D"],
 
-    discard tcGetAttr(STDIN_FILENO, ttyState.addr)
+        ord(Key.Home):      @["\e[1~", "\e[7~", "\eOH", "\e[H"],
+        ord(Key.Insert):    @["\e[2~"],
+        ord(Key.Delete):    @["\e[3~"],
+        ord(Key.End):       @["\e[4~", "\e[8~", "\eOF", "\e[F"],
+        ord(Key.PageUp):    @["\e[5~"],
+        ord(Key.PageDown):  @["\e[6~"],
 
-    if enabled:
-      ttyState.c_lflag = ttyState.c_lflag and not CFlag(ICANON or ECHO)
-      ttyState.c_cc[VMIN] = 0.cuchar
-    else:
-      ttyState.c_lflag = ttyState.c_lflag or ICANON or ECHO
+        ord(Key.F1):        @["\e[11~", "\eOP"],
+        ord(Key.F2):        @["\e[12~", "\eOQ"],
+        ord(Key.F3):        @["\e[13~", "\eOR"],
+        ord(Key.F4):        @["\e[14~", "\eOS"],
+        ord(Key.F5):        @["\e[15~"],
+        ord(Key.F6):        @["\e[17~"],
+        ord(Key.F7):        @["\e[18~"],
+        ord(Key.F8):        @["\e[19~"],
+        ord(Key.F9):        @["\e[20~"],
+        ord(Key.F10):       @["\e[21~"],
+        ord(Key.F11):       @["\e[23~"],
+        ord(Key.F12):       @["\e[24~"],
+    }.toTable
 
-    discard tcSetAttr(STDIN_FILENO, TCSANOW, ttyState.addr)
+    proc nonblock*(enabled: bool) =
+        var ttyState: Termios
 
-  proc consoleInit*() =
-    nonblock(true)
-    installSignalHandlers()
+        discard tcGetAttr(STDIN_FILENO, ttyState.addr)
 
-  proc consoleDeinit*() =
-    nonblock(false)
+        if enabled:
+            ttyState.c_lflag = ttyState.c_lflag and not CFlag(ICANON or ECHO)
+            ttyState.c_cc[VMIN] = 0.cuchar
+        else:
+            ttyState.c_lflag = ttyState.c_lflag or ICANON or ECHO
 
-  proc kbhit(): cint =
-    var tv: Timeval
-    tv.tv_sec = Time(0)
-    tv.tv_usec = 0
+        discard tcSetAttr(STDIN_FILENO, TCSANOW, ttyState.addr)
 
-    var fds: TFdSet
-    FD_ZERO(fds)
-    FD_SET(STDIN_FILENO, fds)
-    discard select(STDIN_FILENO+1, fds.addr, nil, nil, tv.addr)
-    return FD_ISSET(STDIN_FILENO, fds)
+    proc kbhit(): cint =
+        var tv: Timeval
+        tv.tv_sec = Time(0)
+        tv.tv_usec = 0
 
-  proc getKey*(): Key {.inline.} =
-    result = @[]
-    var i = 0
-    while kbhit() > 0 and i < 100:
-      var ret = read(0, keyBuf[i].addr, 1)
-      if ret > 0:
-        i += 1
-      else:
-        break
-    if i == 0:
-      result = Key.None
-    else:
-      result = toKey(i)
+        var fds: TFdSet
+        FD_ZERO(fds)
+        FD_SET(STDIN_FILENO, fds)
+        discard select(STDIN_FILENO+1, fds.addr, nil, nil, tv.addr)
+        return FD_ISSET(STDIN_FILENO, fds)
+
+    proc parseKey(charsRead: int): Key =
+        var key = Key.None
+        if charsRead == 1:
+            let ch = keyBuf[0]
+            case ch:
+            of   9: key = Key.Tab
+            of  10: key = Key.Enter
+            of  27: key = Key.Escape
+            of  32: key = Key.Space
+            of 127: key = Key.Backspace
+            of 0, 29, 30, 31: discard
+            else:
+                key = toKey(ch)
+
+        else:
+            var inputSeq = ""
+            for i in 0..<charsRead:
+                inputSeq &= char(keyBuf[i])
+            for keyCode, sequences in keySequences.pairs:
+                for s in sequences:
+                    if s == inputSeq:
+                        key = toKey(keyCode)
+        result = key
+
+    proc getKey*(): Key {.inline.} =
+        var i = 0
+        while kbhit() > 0 and i < 100:
+            var ret = read(0, keyBuf[i].addr, 1)
+            if ret > 0: i += 1
+            else: break
+        if i == 0:
+            result = Key.None
+        else:
+            result = parseKey(i)
